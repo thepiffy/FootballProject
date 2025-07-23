@@ -1,0 +1,352 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+devtools::install_github("JaseZiv/worldfootballR")
+library(worldfootballR)
+library(tidyverse)
+library(ggsoccer)
+```
+
+Viewing and filtering match results from England
+
+```{r}
+eng_match_results <- load_match_results(country = "ENG", gender = "M", season_end_year = c(2015:2025), tier = "1st")
+glimpse(eng_match_results) 
+```
+
+Filtering only Arsenal's matches
+
+```{r}
+arsenal_decade_results <- filter(eng_match_results, Home == "Arsenal" | Away == "Arsenal")
+glimpse(arsenal_decade_results) 
+```
+
+Filtering out only the xG from the dataset
+
+```{r}
+arsenal_xg <- arsenal_decade_results %>%
+  mutate(
+    Arsenal_xG = if_else(Home == "Arsenal", Home_xG, Away_xG)
+  ) %>%
+  select(Date, Arsenal_xG)
+glimpse(arsenal_xg) 
+```
+
+The xG data only goes back to 2017/18 so there's a warning with this code. I'm plotting to get a visual idea of the data distribution.
+
+```{r}
+ggplot(arsenal_xg, aes(x = as.Date(Date), y = Arsenal_xG)) +
+  geom_line(color = "red", linewidth = 1) +
+  labs(
+    title = "Arsenal's Expected Goals (xG) Over Time",
+    x = "Date",
+    y = "xG"
+  ) +
+  theme_minimal() #' The xG data only goes back to 2017/18 so there's a warning.
+wenger_arsenal_xg <- arsenal_xg %>%
+                       filter(Date >= as.Date("2014-08-16") & Date <= as.Date("2018-05-13")) %>%
+                       summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE)) ## average xG for manager Arsene Wenger
+emery_arsenal_xg <- arsenal_xg %>%
+                       filter(Date >= as.Date("2018-08-12") & Date <= as.Date("2019-11-23")) %>%
+                       summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE)) ## average xG for manager Unai Emery
+arteta_arsenal_xg <- arsenal_xg %>%
+                      filter(Date >= as.Date("2019-12-26") & Date <= as.Date("2025-05-25")) %>%
+                      summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE)) ## average xG for manager Mikel Arteta
+print(wenger_arsenal_xg)
+print(emery_arsenal_xg)
+print(arteta_arsenal_xg)
+```
+
+While Arteta's xG seems lower than wenger's, it's important to note he joined the club during a turbulent period and
+is first couple of years were spent rebuilding the club. A more accurate comparison would be to calculate Arteta's
+average xG until 2022 and his average xG after, which I'll do now. 
+
+```{r}
+arteta_initial_arsenal_xg <- arsenal_xg %>%
+                               filter(Date >= as.Date("2019-12-26") & Date <= as.Date("2022-01-01")) %>%
+                               summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE))
+arteta_later_arsenal_xg <- arsenal_xg %>%
+                               filter(Date >= as.Date("2022-01-01") & Date <= as.Date("2025-05-25")) %>%
+                               summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE))
+print(arteta_initial_arsenal_xg)
+print(arteta_later_arsenal_xg)
+```
+
+When checking, Arteta's initial xG was 1.36 while his later xG is 1.82.
+This is a clear discrepancy and shows how Arteta improved Arsenal's goalscoring chances during his time,
+and checking his initial and later xG shows how there can be discrepancies in this data when checking.
+Just filtering by manager may not show the full picture, to see the clear distribution plotting by graph is better.  
+For completeness I'll do the same for Emery however my hypothesis is there won't be a significant difference.
+If at all, in Emery's case the later xG may be worse, which could justify Arsenal's decision to sack him.
+I'll split Emery's xG across the 2018/19 season and 2019/20 season.  
+Doing the same for Wenger is pointless since the data only begins in the 2017/18 season.
+Wenger was in charge of Arsenal from 1996-2018 so analysing his data for one year seems pointless.
+
+```{r}
+emery_initial_arsenal_xg <- arsenal_xg %>%
+  filter(Date >= as.Date("2018-08-12") & Date <= as.Date("2019-05-12")) %>%
+  summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE))
+emery_later_arsenal_xg <- arsenal_xg %>%
+  filter(Date >= as.Date("2019-08-09") & Date <= as.Date("2019-11-23")) %>%
+  summarise(Average_xG = mean(Arsenal_xG, na.rm = TRUE))
+print(emery_initial_arsenal_xg)
+print(emery_later_arsenal_xg)
+```
+
+Upon viewing, Emery's initial xG was 1.58 while his later xG was 1.35.  
+This confirms the theory there may be a slight decrease in xG, which could justify Arsenal's decision to sack him.  
+I'll conclude with my analysis of xG distribution for now. If I need to do it in the future for my questions,
+I'll follow this blueprint for whatever team or player I need (for player I'll use a different function).  
+I'll analyse the distribution of two more variables in this script, passes and carries.
+In line with my questions, I'll look at the passes and carries of Raheem Sterling from 2018 to 2025.
+His 'prime' (best years) is widely regarded as being in 2019, so I think we'll see a downward trend in both.   
+defining the seasons Sterling played in
+
+```{r}
+seasons <- 2018:2025 
+```
+
+I'll call the player pass and carry stats from the Premier League for 2018-2025 now and store them.
+
+```{r}
+pass_stats <- load_fb_advanced_match_stats(
+  country = "ENG",
+  gender = "M",
+  season_end_year = seasons,
+  tier = "1st",
+  stat_type = "passing", 
+  team_or_player = "player"
+)
+
+
+carry_stats <- load_fb_advanced_match_stats(
+  country = "ENG",
+  gender = "M",
+  season_end_year = seasons,
+  tier = "1st",
+  stat_type = "possession",
+  team_or_player = "player"
+)
+```
+
+Checking to see the column names for passes and carries
+
+```{r}
+glimpse(pass_stats)
+glimpse(carry_stats) 
+```
+
+Filtering passing data for Sterling
+
+```{r}
+sterling_pass <- pass_stats %>%
+  filter(Player == "Raheem Sterling") %>%
+  select(Season_End_Year, Team, Player, Passes_Attempted = Att_Total, Passes_Completed = Cmp_Total, Progressive_Passes = PrgP, Match_Date)
+```
+
+Filtering carrying data for Sterling
+
+```{r}
+sterling_carry <- carry_stats %>%
+  filter(Player == "Raheem Sterling") %>%
+  select(Season_End_Year, Team, Player, Carries = Carries_Carries, Progressive_Carries = PrgC_Carries, DistCarries = TotDist_Carries, Match_Date)
+```
+
+I had trouble joining the two dataframes together so I'll leave them separate for now. It doesn't impact my analysis.  
+Just checking column names and data so I know how to begin my plot.
+
+```{r}
+glimpse(sterling_pass)
+glimpse(sterling_carry) 
+```
+
+I'll make the values numeric so I can plot a continuous graph.
+
+```{r}
+sterling_pass <- sterling_pass %>%
+  mutate(
+    Passes_Attempted = as.numeric(Passes_Attempted),
+    Passes_Completed = as.numeric(Passes_Completed),
+    Progressive_Passes = as.numeric(Progressive_Passes)
+  )
+
+sterling_carry <- sterling_carry %>%
+  mutate(
+    Carries = as.numeric(Carries),
+    Progressive_Carries = as.numeric(Progressive_Carries),
+    DistCarries = as.numeric(DistCarries)
+  )
+```
+
+Now that that's done, I'll plot six graphs for the six different variables. The code is mostly repetitive for each graph
+
+```{r}
+p1 <- ggplot(sterling_pass, aes(x = as.Date(Match_Date), y = Passes_Attempted)) +
+  geom_line(color = "#6CABDD", size = 1) +
+  labs(title = "Raheem Sterling - Passes Attempted",
+       x = "Date",
+       y = "Passes Attempted") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p1)
+
+p2 <- ggplot(sterling_pass, aes(x = as.Date(Match_Date), y = Passes_Completed)) +
+  geom_line(color = "#6CABDD", size = 1) +
+  labs(title = "Raheem Sterling - Passes Completed",
+       x = "Date",
+       y = "Passes Completed") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p2)
+
+p3 <- ggplot(sterling_pass, aes(x = as.Date(Match_Date), y = Progressive_Passes)) +
+  geom_line(color = "#6CABDD", size = 1) +
+  labs(title = "Raheem Sterling - Progressive Passes",
+       x = "Date",
+       y = "Progressive Passes") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p3)
+
+p4 <- ggplot(sterling_carry, aes(x = as.Date(Match_Date), y = Carries)) +
+  geom_line(color = "#935422", size = 1) +
+  labs(title = "Raheem Sterling - Carries",
+       x = "Date",
+       y = "Carries") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p4)
+
+p5 <- ggplot(sterling_carry, aes(x = as.Date(Match_Date), y = Progressive_Carries)) +
+  geom_line(color = "#935422", size = 1) +
+  labs(title = "Raheem Sterling - Progressive Carries",
+       x = "Date",
+       y = "Progressive Carries") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p5)
+
+p6 <- ggplot(sterling_carry, aes(x = as.Date(Match_Date), y = DistCarries)) +
+  geom_line(color = "#935422", size = 1) +
+  labs(title = "Raheem Sterling - Distance Carried",
+       x = "Date",
+       y = "Distance Carried") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%b %Y")
+print(p6)
+```
+
+After a lot of code and viewing the graphs, there seems to be a slight downward trend.
+This is apparently especially prevalent in mid 2024, which coincides with his time at Arsenal.
+To conclude my analysis of this data distribution, I'll analyse Sterling's stats across his time playing for Manchester City, Chelsea and Arsenal (on loan).  
+Converting Match_Date to Date format for both datasets
+
+```{r}
+sterling_pass <- sterling_pass %>%
+  mutate(Match_Date = as.Date(Match_Date))
+
+sterling_carry <- sterling_carry %>%
+  mutate(Match_Date = as.Date(Match_Date))
+```
+
+Defining the date periods
+
+```{r}
+city_start <- as.Date("2018-01-01")
+city_end <- as.Date("2022-07-01")
+chelsea_start <- as.Date("2022-07-01")
+chelsea_end <- as.Date("2024-08-01")
+arsenal_start <- as.Date("2024-08-01")
+arsenal_end <- as.Date("2025-05-31")
+```
+
+Calculating City period averages (Jan 2018 - Jul 2022)
+
+```{r}
+city_pass_data <- sterling_pass %>%
+  filter(Match_Date >= city_start & Match_Date < city_end)
+
+city_carry_data <- sterling_carry %>%
+  filter(Match_Date >= city_start & Match_Date < city_end)
+
+passes_attempted_city <- mean(city_pass_data$Passes_Attempted, na.rm = TRUE)
+passes_completed_city <- mean(city_pass_data$Passes_Completed, na.rm = TRUE)
+progressive_passes_city <- mean(city_pass_data$Progressive_Passes, na.rm = TRUE)
+carries_city <- mean(city_carry_data$Carries, na.rm = TRUE)
+progressive_carries_city <- mean(city_carry_data$Progressive_Carries, na.rm = TRUE)
+distcarries_city <- mean(city_carry_data$DistCarries, na.rm = TRUE)
+```
+
+Calculating Chelsea period averages (Jul 2022 - Aug 2024)
+
+```{r}
+chelsea_pass_data <- sterling_pass %>%
+  filter(Match_Date >= chelsea_start & Match_Date < chelsea_end)
+
+chelsea_carry_data <- sterling_carry %>%
+  filter(Match_Date >= chelsea_start & Match_Date < chelsea_end)
+
+passes_attempted_chelsea <- mean(chelsea_pass_data$Passes_Attempted, na.rm = TRUE)
+passes_completed_chelsea <- mean(chelsea_pass_data$Passes_Completed, na.rm = TRUE)
+progressive_passes_chelsea <- mean(chelsea_pass_data$Progressive_Passes, na.rm = TRUE)
+carries_chelsea <- mean(chelsea_carry_data$Carries, na.rm = TRUE)
+progressive_carries_chelsea <- mean(chelsea_carry_data$Progressive_Carries, na.rm = TRUE)
+distcarries_chelsea <- mean(chelsea_carry_data$DistCarries, na.rm = TRUE)
+```
+
+Calculating Arsenal period averages (Aug 2024 - May 2025)
+
+```{r}
+arsenal_pass_data <- sterling_pass %>%
+  filter(Match_Date >= arsenal_start & Match_Date <= arsenal_end)
+
+arsenal_carry_data <- sterling_carry %>%
+  filter(Match_Date >= arsenal_start & Match_Date <= arsenal_end)
+
+passes_attempted_arsenal <- mean(arsenal_pass_data$Passes_Attempted, na.rm = TRUE)
+passes_completed_arsenal <- mean(arsenal_pass_data$Passes_Completed, na.rm = TRUE)
+progressive_passes_arsenal <- mean(arsenal_pass_data$Progressive_Passes, na.rm = TRUE)
+carries_arsenal <- mean(arsenal_carry_data$Carries, na.rm = TRUE)
+progressive_carries_arsenal <- mean(arsenal_carry_data$Progressive_Carries, na.rm = TRUE)
+distcarries_arsenal <- mean(arsenal_carry_data$DistCarries, na.rm = TRUE)
+```
+
+Finally, I'll pull all the averages into a dataframe for easier viewing.
+
+```{r}
+sterling_summary <- data.frame(
+  Period = c("Manchester City", "Chelsea", "Arsenal"),
+  Passes_Attempted = c(passes_attempted_city, passes_attempted_chelsea, passes_attempted_arsenal),
+  Passes_Completed = c(passes_completed_city, passes_completed_chelsea, passes_completed_arsenal),
+  Progressive_Passes = c(progressive_passes_city, progressive_passes_chelsea, progressive_passes_arsenal),
+  Carries = c(carries_city, carries_chelsea, carries_arsenal),
+  Progressive_Carries = c(progressive_carries_city, progressive_carries_chelsea, progressive_carries_arsenal),
+  DistCarries = c(distcarries_city, distcarries_chelsea, distcarries_arsenal)
+)
+
+print(sterling_summary)
+```
+
+Sterling's stats did indeed drop across clubs, especially at Arsenal.
