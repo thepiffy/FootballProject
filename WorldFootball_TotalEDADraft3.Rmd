@@ -1,0 +1,421 @@
+
+```{r}
+library(worldfootballR)
+library(tidyverse)
+library(ggsoccer)
+library(skimr)
+library(glue)
+library(patchwork)
+```
+
+This analysis is restricted to regular-season matches in Europe's traditional 'Top 5' Leagues and their respective domestic cup competitions.
+It will also include matches in the three major continental competitions (EUROs, Copa America, AFCON) as well as the premier European club competitions (Champions, Europa and Conference League).
+Finally, it will also include the World Cup. This is to ensure comparability and data consistency.
+Before I start EDA, I'll write a couple of functions to make visualisations of missing data.
+Since I'm analysing a lot of datasets, this will help streamline my code and make it more efficient.
+I'll also be setting a few variables which I'll be reusing throughout my EDA.
+
+```{r}
+#I used progress bars when writing this code for debug purposes, I'm disabling them here for more efficient visualisations.
+options(dplyr.show_progress = FALSE)
+options(purrr.show_progress = FALSE)
+options(worldfootballR.progress = FALSE)
+
+find_missing_values <- function(data, na_columns) {
+  # Ensuring required columns exist (I want to return the date, competition and home/away teams where the NA values lie)
+  required_columns <- c("Date", "Competition_Name", "Home", "Away")
+  if (!all(required_columns %in% names(data))) {
+    stop("Dataframe must contain: Date, Competition_Name, Home, and Away columns.")
+  }
+  
+  if (!all(na_columns %in% names(data))) {
+    stop("One or more columns in 'na_columns' do not exist in the dataframe.")
+  }
+  
+  # Filtering rows with NA in any of the specified columns
+  data %>%
+    filter(if_any(all_of(na_columns), is.na)) %>%
+    select(Date, Competition_Name, Home, Away)
+}
+
+league_list <- c("ENG", "ESP", "GER", "ITA", "FRA")
+```
+
+In the first section, I'll perform EDA on the scraped data from the worldfootballR_data repo.
+I'll start by loading match results for the top 5 European leagues for the past decade.  
+Then, I'll briefly view the data and check if there's any gaps in important variables.
+
+```{r}
+topleagues_data <- load_match_results(country = league_list, gender = c("M"), season_end_year = c(2015:2025), tier = "1st")
+
+tally(topleagues_data)
+
+skim(topleagues_data)
+```
+
+There's a lot of NA values, especially for xG. I'll use the naniar package to visually inspect where these values are.
+
+```{r}
+library(naniar)
+gg_miss_var(topleagues_data)
+vis_miss(topleagues_data)
+```
+
+A lot of NA values for Round is plausible (these are usually reserved for cup competitions).  
+It's important to note the missing Attendance values, however.  
+It appears the xG values that are missing originate at the beginning of the data for each league.
+There are five blocks of missing xG data which corresponds to the five leagues I've imported.  
+These blocks appear to be at the start of the data, which could mean xG data is only availabe past a certain year.  
+I'll import a new dataset starting from a later year and run the same test to double-check.
+
+```{r}
+recent_topleagues_data <- load_match_results(country = c("ENG", "ESP", "GER", "ITA", "FRA"), gender = c("M"), season_end_year = c(2018:2025), tier = "1st")
+vis_miss(recent_topleagues_data)
+```
+
+It's clear that the missing data values for xG corresponded to my timeframe of data, as changing my start date from 2015 to 2018 reduced the missing values from 32% to 6%.  
+However, there are still some values missing, and I think this is because the data was last updated in February 2025 while the current 2025 season ends in May.  
+The fixtures up until May 2025 are confirmed, that's why they are in the dataset. The only things missing in theory should be the xG.  
+This is because xG is recorded as the match is played, while all of the other data is determined and fixed ahead of the 24/25 season.
+To confirm this hypothesis, I'll extract all data before this date and confirm no data is missing.
+In order to do this, the values in the Date column must be of data type Date, which I'll confirm now.
+
+```{r}
+topleagues_data <- topleagues_data %>%
+  mutate(Date = as.Date(Date))
+recent_topleagues_before_February <- recent_topleagues_data %>%
+  filter(Date < as.Date("2025-02-04"))
+vis_miss(recent_topleagues_before_February)
+```
+
+Only 1% of the xG data remains missing. I'll make a new dataframe with just those rows and inspect it to see where the missing data is.
+
+```{r}
+missing_xg_rows <- find_missing_values(recent_topleagues_before_February, c("Home_xG", "Away_xG"))
+skim(missing_xg_rows)
+```
+
+There's only 125 rows, which means the select() function showed the whole dataframe.  
+The Ligue 1 (French league) 2019/20 season was suspended on March 13 2020 due to the coronavirus and cancelled on April 20, therefore those matches were never actually played.
+This explains why there is no xG data for Ligue 1 during this timeframe.  
+The remaining missing Ligue 1 and Bundesliga data (except for one game) is because those games were the relegation play-offs of those leagues.
+These two leagues are the only top 5 leagues that adopt a system of relegation play-offs.
+This is a system whereby 16th place in the league (third from bottom) plays 3rd place from the second tier in two games: one home and one away.
+The winner, decided by aggregate score, either remains or is promoted to the first divison for next season. The loser remains/is relegated to the second division.
+It's arguable as to whether these games count towards the league. Since they don't comprise of the 38 (or 34) games each team plays in a standard league season, I won't count them.
+It feels unfair to take stats for some teams playing 34 games and others playing 36.  
+There's one Bundesliga game that wasn't a playoff, however, which was the Bochum vs M'Gladbach match on 2022-03-18.
+It's clear this isn't a playoff game because there was no return game between Gladbach and Bochum (all of the playoffs are in pairs).
+This game also took place mid-season while the other games took place between May and July (att he end of the season).
+In this game, Gladbach led 2-0 at around the 68-70th minute when assistant referee Christian Gittelmann was struck in the head by a beer cup thrown from the crowd at Bochum's stadium.
+This resulted in a serious injury and referee Benjamin Cortus abandoned the match shortly after for security reasons.
+The German Football Association awarded the game as a Gladbach 2-0 win as opposed to a replay. Bochum's appeal for a replay was later withdrew.  
+The final outlier is the September 2020 game between Hellas Verona and Roma in Italy's Serie A.
+The game ended 0-0 in regulation time, however Verona was awarded a 3-0 forfeit win by the Italian Football Federation afterwards.
+This is because Roma fielded an ineligible player (Amadou Diawara) who had just turned 23 but was registered in the under-22 registration list.
+It was a small mistake, but it gave Verona the win. This is probably the reason why the xG and goal count wasn't collected in the dataset.  
+In conclusion, there are two outliers to look out for when analysing Bundesliga and Serie A data, and Ligue 1 data analysis for the 2019/20 season will be skewed because of its cancellation.  
+Now, I'll do the same tests on data from the most prominent football cup competitions worldwide (domestic and international). I'll also take a quick look at them and check for missing data.  
+
+```{r}
+cups <- c("Africa Cup of Nations", "CONMEBOL Copa América", "Copa del Rey", "Coppa Italia", "Coupe de France", " DFB-Pokal", "EFL Cup", "FA Cup", "FIFA World Cup", "UEFA Champions League", "UEFA Conference League", "UEFA Europa League", "UEFA European Football Championship")
+cups_data <- load_match_comp_results(comp_name = cups)
+skim(cups_data)
+```
+
+There's a lot of data here, though the most important is xG. I'll perform the same visual inspection of missing values.
+
+```{r}
+gg_miss_var(cups_data)
+vis_miss(cups_data)
+```
+
+There's quite a lot of missing xG data. I'll first filter out all data before the 2017/18  season, as this is when xG collection began. I'll do the same step of converting the Date column values to have the Date data type.  
+The other missing valuesw like Week and Attendance don't matter as much (Week can be pulled from the Date) and attendance isn't necessary for player/team analysis.
+
+```{r}
+cups_data <- cups_data %>%
+  mutate(Date = as.Date(Date))
+filtered_cups_data <- filter(cups_data, Date > as.Date("2017-06-06"))
+vis_miss(filtered_cups_data)
+```
+
+It's better, going from 84% missing to 64% missing, though there's still a lot of missing data. I'll filter out the rows with missing xG and look at them now.  
+
+```{r}
+missing_cup_xg_rows <- find_missing_values(filtered_cups_data, c("Home_xG", "Away_xG"))
+skim(missing_cup_xg_rows)
+```
+
+The dataset seems to be lacking quite a lot of data for the domestic cup competitions. Not only was it last updated in February 2024 (no data for the 24/25 season), very little xG data from 2018-2024 for the domestic cup competitions exists.
+Simply because there is so much missing data I don't think this data is usable for my analysis, I'll most likely be using the UnderStat data (which I'll analyse in a later section) as there's simply too much missing here.  
+The main problem is there's data missing which simply shouldn't be. For example, there should be xG data for the 2020 FA Cup tie between Tottenham and Norwhich (I can access it easily online) but it's just not there.  
+There's many other databases I can pull data from with this package, so I'll use cup data from one of them.  
+Now I'll analyse data from the big 5 league advanced season stats function, pulling from FBRef.
+
+```{r}
+stat_types <- c("standard", "shooting", "passing", "passing_types", "gca",
+                "defense", "possession", "playing_time", "misc", 
+                "keepers", "keepers_adv")
+
+seasons <- 2018:2025
+
+# Function to load data with error handling
+load_tagged_stats <- function(stat_type, team_or_player) {
+  tryCatch({
+    Sys.sleep(3)
+    data <- fb_big5_advanced_season_stats(
+      stat_type = stat_type,
+      season_end_year = seasons,
+      team_or_player = team_or_player
+    )
+    
+    if (!is.null(data) && nrow(data) > 0) {
+      data <- data %>% mutate(Stat_Type = stat_type, Level = team_or_player)
+      return(data)
+    } else {
+      return(NULL)
+    }
+  }, error = function(e) {
+    return(NULL)
+  })
+}
+
+
+# Function to sample dataframes
+sample_df <- function(df, n = 100) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  df %>% slice_sample(n = min(n, nrow(df)))
+}
+
+# Cleaned missing data visualization function
+plot_missing_summary <- function(df, stat_type, level, top_n = 8) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  
+  missing_summary <- df %>%
+    summarise(across(everything(), ~mean(is.na(.)) * 100)) %>%
+    pivot_longer(cols = everything(), names_to = "variable", values_to = "missing_pct") %>%
+    filter(missing_pct > 0) %>%
+    arrange(desc(missing_pct)) %>%
+    slice_head(n = top_n) %>%
+    mutate(
+      variable = fct_reorder(variable, missing_pct),
+      variable_clean = variable %>%
+        str_replace_all("_", " ") %>%
+        str_replace_all("1er", "Per") %>%
+        str_replace_all("Prcent", "Percent") %>%
+        str_replace_all("pct", "Percent") %>%
+        str_replace_all("90s", "Per 90") %>%
+        str_to_title() %>%
+        str_replace_all("\\bPer\\b", "per") %>%
+        str_replace_all("\\bAnd\\b", "and") %>%
+        str_replace_all("\\bOf\\b", "of") %>%
+        str_replace_all("\\bIn\\b", "in") %>%
+        str_replace_all("\\bTo\\b", "to") %>%
+        str_trunc(30)
+    )
+  
+  if (nrow(missing_summary) == 0) {
+    return(
+      ggplot() +
+        annotate("text", x = 0.5, y = 0.5, label = "No Missing Data", 
+                 size = 4, color = "darkgreen", fontface = "bold") +
+        labs(title = glue("{str_to_title(level)} - {str_to_title(stat_type)}")) +
+        theme_void() +
+        theme(plot.title = element_text(hjust = 0.5, size = 10, face = "bold"))
+    )
+  }
+  
+  fill_color <- case_when(
+    max(missing_summary$missing_pct) > 50 ~ "#d73027",
+    max(missing_summary$missing_pct) > 25 ~ "#fc8d59",
+    TRUE ~ "#fee08b"
+  )
+  
+  ggplot(missing_summary, aes(x = reorder(variable_clean, missing_pct), y = missing_pct)) +
+    geom_col(fill = fill_color, alpha = 0.8, width = 0.7) +
+    geom_text(aes(label = paste0(round(missing_pct, 1), "%")), 
+              hjust = -0.1, size = 2.5, color = "black", fontface = "bold") +
+    coord_flip() +
+    labs(
+      title = glue("{str_to_title(level)} - {str_to_title(stat_type)}"),
+      x = NULL,
+      y = "Missing %"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 10, face = "bold"),
+      axis.text.y = element_text(size = 8, hjust = 1),
+      axis.text.x = element_text(size = 8),
+      axis.title.x = element_text(size = 8),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_blank(),
+      plot.margin = margin(5, 5, 5, 5)
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    scale_x_discrete(expand = expansion(add = 0.3))
+}
+
+# Load data
+player_data_list <- map(stat_types, ~ load_tagged_stats(.x, "player")) %>% 
+  set_names(stat_types)
+
+team_data_list <- map(stat_types, ~ load_tagged_stats(.x, "team")) %>% 
+  set_names(stat_types)
+
+
+# First, create the missing data plots
+player_missing_season_plots <- map2(player_data_list, names(player_data_list), 
+                                   ~plot_missing_summary(.x, .y, "player"))
+
+team_missing_season_plots <- map2(team_data_list, names(team_data_list), 
+                                 ~plot_missing_summary(.x, .y, "team"))
+
+# Print player plots individually
+cat("\n=== PLAYER DATA MISSING PLOTS ===\n")
+for (i in seq_along(player_missing_season_plots)) {
+  cat(glue::glue("\nPlayer Plot {i}: {names(player_missing_season_plots)[i]}\n"))
+  print(player_missing_season_plots[[i]])
+}
+
+# Print team plots individually  
+cat("\n=== TEAM DATA MISSING PLOTS ===\n")
+for (i in seq_along(team_missing_season_plots)) {
+  cat(glue::glue("\nTeam Plot {i}: {names(team_missing_season_plots)[i]}\n"))
+  print(team_missing_season_plots[[i]])
+}
+```
+
+This is a massive dataset. The code is quite complicated because I want to create meaningful and understandable visualisations.
+It's quite hard to produce visualisations that don't get overly complicated. Normally I'd use functions from the naniar library, however this dataset is simply too big.  
+In order to gain a better understanding of this data, I'll focus on a few key metrics from these datasets. I'll take a look at xG, total carries, take-on attempts and touches, and for these four datatypes I'll analyse their distribution and note any missing values.
+
+```{r}
+# Understat-compatible league names
+understat_leagues <- c("EPL", "La liga", "Bundesliga", "Serie A", "Ligue 1")
+
+# Load data for all leagues, keep league names as column
+matches_list <- lapply(understat_leagues, function(lg) {
+  df <- understat_league_match_results(
+    league = lg,
+    season_start_year = 2023
+  )
+  df$League <- lg
+  df
+})
+
+matches_df <- bind_rows(matches_list)
+
+# Check for missing xG values
+missing_xg <- matches_df %>%
+  filter(if_any(all_of(c("home_xG", "away_xG")), is.na)) %>%
+  select(datetime, home_team, away_team, League)
+
+print(missing_xg)
+
+# Prepare & plot xG distribution
+matches_df %>%
+  select(datetime, League, home_xG, away_xG) %>%
+  pivot_longer(cols = c(home_xG, away_xG),
+               names_to = "Side",
+               values_to = "xG") %>%
+  drop_na(xG) %>%
+  ggplot(aes(x = xG, fill = Side)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  facet_wrap(~League) +
+  labs(
+    title = "Distribution of xG in Understat Match Data (2023/24)",
+    x = "Expected Goals (xG)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+It's interesting to notice the distributions. For quite a lot of the leagues, the xG peaks at around 0-2 and drops off, which is to be expected. It's also good to note the higher peak for the Serie A at lower xG values (0-1), which aligns with its reputation as a more tactical and defensive league. I'll now run some code to check for missing values within the data.
+
+```{r}
+# 1. Summary of missing values
+missing_summary <- matches_df %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "Column", values_to = "Missing_Count") %>%
+  mutate(Missing_Percent = round(Missing_Count / nrow(matches_df) * 100, 2)) %>%
+  arrange(desc(Missing_Percent))
+
+print(missing_summary)
+
+# 2. Heatmap of missingness
+gg_miss_var(matches_df, show_pct = TRUE) +
+  labs(
+    title = "Missing Values per Column (Understat Match Data)",
+    x = "Column",
+    y = "Number of Missing Values"
+  ) +
+  theme_minimal()
+
+# 3. Missing data pattern visualisation
+vis_miss(matches_df, sort_miss = TRUE) +
+  labs(
+    title = "Missing Data Heatmap (Match-Level)",
+    subtitle = "White = Missing, Black = Present"
+  )
+```
+
+This shows we have no missing data, which is great. I'll now run the same pipeline for carries, take-on attempts and touches. Since these are all possession-based stats, I can run them in one piece of code.
+
+```{r}
+
+# Fetch player possession stats for each league
+possession_df <- fb_big5_advanced_season_stats(
+  season_end_year = 2024,
+  stat_type = "possession",
+  team_or_player = "player",
+  time_pause = 3
+)
+
+possession_df <- bind_rows(possession_df)
+
+# Filter for the variables of interest
+vars_of_interest <- c("Carries_Carries", "Att_Take", "Touches_Touches")
+
+# ---- Missing Values Analysis ----
+missing_summary <- possession_df %>%
+  summarise(across(all_of(vars_of_interest), ~sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), names_to = "Column", values_to = "Missing_Count") %>%
+  mutate(Missing_Percent = round(Missing_Count / nrow(possession_df) * 100, 2)) %>%
+  arrange(desc(Missing_Percent))
+
+print(missing_summary)
+
+# Visualise missing values per variable
+gg_miss_var(possession_df[, vars_of_interest], show_pct = TRUE) +
+  labs(
+    title = "Missing Values per Variable (FBref Possession Data)",
+    x = "Variable",
+    y = "Number of Missing Values"
+  ) +
+  theme_minimal()
+
+# Heatmap of missingness across players
+vis_miss(possession_df[, vars_of_interest], sort_miss = TRUE) +
+  labs(
+    title = "Missing Data Heatmap",
+    subtitle = "White = Missing, Black = Present"
+  )
+
+# ---- Distribution Analysis ----
+possession_df %>%
+  pivot_longer(cols = all_of(vars_of_interest),
+               names_to = "Variable", values_to = "Value") %>%
+  drop_na(Value) %>%
+  ggplot(aes(x = Value, fill = Variable)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  facet_wrap(~Variable, scales = "free_x") +
+  labs(
+    title = "Distribution of Carries, Take-Ons, and Touches",
+    x = "Value",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+```
+
+The lack of missing values is an encouraging sign. The distribution of the variables seems reasonable, it's quite interesting to see the sharp peaks for lower values which could indicate differences in position. Further analysis with facet-wrap for more specific data questions could indicate why these peaks are there (possibly due to differences in player profiles). 
