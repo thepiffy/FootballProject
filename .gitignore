@@ -1,0 +1,10 @@
+# R specific
+.Rhistory
+.Rdata
+.Rproj.user/
+# Datasets
+data/*.csv
+data/*.xlsx
+# OS cruft
+.DS_Store
+Thumbs.db
